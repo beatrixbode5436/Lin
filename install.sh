@@ -108,9 +108,13 @@ EOF
 
     echo ""
     info "=== Installation complete! ==="
-    warn "Next steps:"
-    warn "  1. Edit config:  sudo bash install.sh edit-config"
-    warn "  2. Start bot:    sudo bash install.sh restart"
+    info "Opening config editor now…"
+    echo ""
+    cmd_edit_config
+
+    echo ""
+    warn "Config saved. Run this to start the bot:"
+    warn "  bash /opt/license-center/install.sh restart"
 }
 
 cmd_update() {
