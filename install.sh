@@ -41,6 +41,15 @@ cmd_install() {
     need_root "install"
     info "=== Installing License Center Bot ==="
 
+    # Clone or update repo
+    if [[ -d "$APP_DIR/.git" ]]; then
+        info "Repo already exists, pulling latest…"
+        git -C "$APP_DIR" pull --ff-only
+    else
+        info "Cloning repository…"
+        git clone "$REPO_URL" "$APP_DIR"
+    fi
+
     # Create directories
     mkdir -p "$APP_DIR/data" "$APP_DIR/logs"
     info "Directories: data/ logs/ created"
