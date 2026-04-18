@@ -15,8 +15,10 @@
 # =============================================================================
 set -euo pipefail
 
+REPO_URL="https://github.com/beatrixbode5436/Lin"
 SERVICE="license-center"
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="/opt/license-center"
+APP_DIR="$INSTALL_DIR"
 VENV_DIR="$APP_DIR/venv"
 PYTHON="$VENV_DIR/bin/python"
 PIP="$VENV_DIR/bin/pip"
