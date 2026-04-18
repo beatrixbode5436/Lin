@@ -117,7 +117,10 @@ cmd_update() {
     need_root "update"
     info "=== Updating License Center Bot ==="
 
-    systemctl is-active --quiet "$SERVICE" && systemctl stop "$SERVICE" && info "Service stopped"
+    systemctl is-active --quiet "$SERVICE" 2>/dev/null && systemctl stop "$SERVICE" && info "Service stopped" || true
+
+    info "Pulling latest code…"
+    git -C "$APP_DIR" pull --ff-only
 
     "$PIP" install --upgrade pip -q
     "$PIP" install -r "$APP_DIR/requirements.txt" -q
