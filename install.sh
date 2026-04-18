@@ -75,11 +75,22 @@ cmd_install() {
     # .env file
     if [[ ! -f "$APP_DIR/.env" ]]; then
         cp "$APP_DIR/env.example" "$APP_DIR/.env"
-        warn ".env created from template – edit it before starting:"
-        warn "  sudo bash install.sh edit-config"
-    else
-        info ".env already exists"
     fi
+
+    # Interactive config wizard
+    echo ""
+    info "=== Configuration Setup ==="
+
+    read -rp "🤖 BOT_TOKEN (از @BotFather): " input_token
+    read -rp "👤 ADMIN_IDS (آیدی عددی، کاما جدا مثل: 123456,789012): " input_admins
+    read -rp "🌐 API_BASE_URL (مثال: http://$(hostname -I | awk '{print $1}'):5000): " input_api_url
+    input_api_url="${input_api_url:-http://$(hostname -I | awk '{print $1}'):5000}"
+
+    sed -i "s|BOT_TOKEN=.*|BOT_TOKEN=${input_token}|" "$APP_DIR/.env"
+    sed -i "s|ADMIN_IDS=.*|ADMIN_IDS=${input_admins}|" "$APP_DIR/.env"
+    sed -i "s|API_BASE_URL=.*|API_BASE_URL=${input_api_url}|" "$APP_DIR/.env"
+
+    info "✅ تنظیمات ذخیره شد"
 
     # systemd unit
     cat > "$UNIT_FILE" <<EOF
@@ -108,13 +119,12 @@ EOF
 
     echo ""
     info "=== Installation complete! ==="
-    info "Opening config editor now…"
+    info "Starting bot service…"
+    systemctl start "$SERVICE"
+    info "✅ ربات استارت شد!"
     echo ""
-    cmd_edit_config
-
-    echo ""
-    warn "Config saved. Run this to start the bot:"
-    warn "  bash /opt/license-center/install.sh restart"
+    info "برای مشاهده لاگ:  bash /opt/license-center/install.sh logs"
+    info "برای وضعیت:       bash /opt/license-center/install.sh status"
 }
 
 cmd_update() {
