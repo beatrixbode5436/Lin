@@ -46,11 +46,16 @@ cmd_install() {
         info "Repo already exists, pulling latest…"
         git -C "$APP_DIR" pull --ff-only
     else
+        # Remove leftover directory from a previous failed install
+        if [[ -d "$APP_DIR" ]]; then
+            info "Removing incomplete directory…"
+            rm -rf "$APP_DIR"
+        fi
         info "Cloning repository…"
         git clone "$REPO_URL" "$APP_DIR"
     fi
 
-    # Create directories
+    # Create data directories (not tracked by git)
     mkdir -p "$APP_DIR/data" "$APP_DIR/logs"
     info "Directories: data/ logs/ created"
 
