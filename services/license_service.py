@@ -242,9 +242,7 @@ def rotate_api_key(license_id: int) -> str:
 def activate_license(
     api_key: str,
     bot_username: str,
-    owner_telegram_id: Any,
-    owner_username: str,
-    machine_id: str,
+    machine_id: str | None = None,
     server_ip: str | None = None,
 ) -> dict:
     conn = get_connection()
@@ -264,9 +262,6 @@ def activate_license(
 
         if lic["bot_username"] != bot_username.lower().lstrip("@"):
             return _mismatch_response("Bot username mismatch")
-
-        if lic["owner_username"] != owner_username.lower().lstrip("@"):
-            return _mismatch_response("Owner username mismatch")
 
         if not lic["is_active"]:
             return {
@@ -288,18 +283,19 @@ def activate_license(
                 "expires_at": lic["expires_at"], "remaining_hours": 0,
             }
 
-        if not lic["machine_id"]:
-            conn.execute(
-                "UPDATE licenses SET machine_id = ?, server_ip = ?, status = 'active', updated_at = ? WHERE id = ?",
-                (machine_id, server_ip, now.isoformat(), lic["id"]),
-            )
-            conn.commit()
-        elif lic["machine_id"] != machine_id:
-            return {
-                "ok": False, "is_licensed": False, "status": "machine_mismatch",
-                "message": "Machine ID mismatch",
-                "expires_at": lic["expires_at"], "remaining_hours": 0,
-            }
+        if machine_id:
+            if not lic["machine_id"]:
+                conn.execute(
+                    "UPDATE licenses SET machine_id = ?, server_ip = ?, status = 'active', updated_at = ? WHERE id = ?",
+                    (machine_id, server_ip, now.isoformat(), lic["id"]),
+                )
+                conn.commit()
+            elif lic["machine_id"] != machine_id:
+                return {
+                    "ok": False, "is_licensed": False, "status": "machine_mismatch",
+                    "message": "Machine ID mismatch",
+                    "expires_at": lic["expires_at"], "remaining_hours": 0,
+                }
 
         remaining_hours = int((expires_at - now).total_seconds() / 3600)
         return {
@@ -315,9 +311,7 @@ def activate_license(
 def check_license(
     api_key: str,
     bot_username: str,
-    owner_telegram_id: Any,
-    owner_username: str,
-    machine_id: str,
+    machine_id: str | None = None,
 ) -> dict:
     from services.settings_service import get_setting
 
@@ -343,10 +337,6 @@ def check_license(
         if lic["bot_username"] != bot_username.lower().lstrip("@"):
             return _check_fail("mismatch", "Bot username mismatch",
                                "❌ خطا در تطبیق اطلاعات ربات", subscription_text)
-
-        if lic["owner_username"] != owner_username.lower().lstrip("@"):
-            return _check_fail("mismatch", "Owner username mismatch",
-                               "❌ خطا در تطبیق یوزرنیم مالک", subscription_text)
 
         if not lic["is_active"]:
             return {
@@ -375,7 +365,7 @@ def check_license(
                 "subscription_text": subscription_text,
             }
 
-        if lic["machine_id"] and lic["machine_id"] != machine_id:
+        if machine_id and lic["machine_id"] and lic["machine_id"] != machine_id:
             return _check_fail(
                 "machine_mismatch", "Machine ID mismatch",
                 "❌ شناسه دستگاه تطابق ندارد", subscription_text,

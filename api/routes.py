@@ -5,8 +5,8 @@ from services.license_service import activate_license, check_license
 
 logger = logging.getLogger(__name__)
 
-_REQUIRED_ACTIVATE = {"api_key", "bot_username", "owner_telegram_id", "owner_username", "machine_id"}
-_REQUIRED_CHECK    = {"api_key", "bot_username", "owner_telegram_id", "owner_username", "machine_id"}
+_REQUIRED_ACTIVATE = {"api_key", "bot_username"}
+_REQUIRED_CHECK    = {"api_key", "bot_username"}
 
 
 def _missing_fields(data: dict, required: set) -> list[str]:
@@ -38,9 +38,7 @@ def create_app() -> Flask:
         result = activate_license(
             api_key=str(data["api_key"]).strip(),
             bot_username=str(data["bot_username"]).strip(),
-            owner_telegram_id=data["owner_telegram_id"],
-            owner_username=str(data["owner_username"]).strip(),
-            machine_id=str(data["machine_id"]).strip(),
+            machine_id=str(data.get("machine_id", "") or "").strip() or None,
             server_ip=str(data.get("server_ip", "") or "").strip() or None,
         )
         status_code = 200 if result.get("ok") else 403
@@ -67,9 +65,7 @@ def create_app() -> Flask:
         result = check_license(
             api_key=str(data["api_key"]).strip(),
             bot_username=str(data["bot_username"]).strip(),
-            owner_telegram_id=data["owner_telegram_id"],
-            owner_username=str(data["owner_username"]).strip(),
-            machine_id=str(data["machine_id"]).strip(),
+            machine_id=str(data.get("machine_id", "") or "").strip() or None,
         )
         logger.info(
             "check | bot=%s owner_id=%s licensed=%s",
