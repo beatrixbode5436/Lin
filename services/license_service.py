@@ -98,6 +98,49 @@ def get_licenses_by_owner(owner_telegram_id: int) -> list[dict]:
         conn.close()
 
 
+def search_licenses(query: str, page: int = 1, per_page: int = 10) -> tuple[list[dict], int]:
+    """Search licenses by numeric ID, owner_telegram_id, owner_username, or bot_username."""
+    conn = get_connection()
+    try:
+        offset = (page - 1) * per_page
+        q = query.strip().lstrip("@")
+        # Try exact numeric match on id / owner_telegram_id
+        if q.isdigit():
+            where = "WHERE id = ? OR owner_telegram_id = ?"
+            params = (int(q), int(q))
+        else:
+            like = f"%{q}%"
+            where = "WHERE owner_username LIKE ? OR bot_username LIKE ?"
+            params = (like, like)
+        rows = conn.execute(
+            f"SELECT * FROM licenses {where} ORDER BY expires_at ASC LIMIT ? OFFSET ?",
+            (*params, per_page, offset),
+        ).fetchall()
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM licenses {where}", params
+        ).fetchone()[0]
+        return [dict(r) for r in rows], total
+    finally:
+        conn.close()
+
+
+def set_license_time(license_id: int, hours: int) -> dict | None:
+    """Set license expiry to exactly `hours` from now."""
+    conn = get_connection()
+    try:
+        now = datetime.utcnow()
+        new_expiry = now + timedelta(hours=hours)
+        conn.execute(
+            "UPDATE licenses SET expires_at = ?, updated_at = ? WHERE id = ?",
+            (new_expiry.isoformat(), now.isoformat(), license_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM licenses WHERE id = ?", (license_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def get_all_licenses(page: int = 1, per_page: int = 10) -> tuple[list[dict], int]:
     conn = get_connection()
     try:

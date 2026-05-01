@@ -1,8 +1,10 @@
 import logging
+import os
+import shutil
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import ADMIN_IDS, API_BASE_URL
+from config import ADMIN_IDS, API_BASE_URL, DB_PATH
 from bot.keyboards.admin_kb import (
     admin_panel_keyboard,
     licenses_panel_keyboard,
@@ -10,6 +12,7 @@ from bot.keyboards.admin_kb import (
     license_time_management_keyboard,
     license_edit_keyboard,
     bots_panel_keyboard,
+    backup_panel_keyboard,
 )
 from bot.states import States, get_state, set_state, clear_state
 from services.license_service import (
@@ -21,6 +24,8 @@ from services.license_service import (
     delete_license,
     rotate_api_key,
     adjust_license_hours,
+    search_licenses,
+    set_license_time,
 )
 from services.settings_service import get_setting, set_setting
 from database.db import get_connection
@@ -34,6 +39,23 @@ _LICENSES_PER_PAGE = 10
 
 def _is_admin(telegram_id: int) -> bool:
     return telegram_id in ADMIN_IDS
+
+
+def _do_send_backup(bot: telebot.TeleBot, chat_id: int) -> None:
+    """Send current DB file as a document to chat_id."""
+    try:
+        dest = get_setting("backup_dest", "")
+        target = int(dest) if dest and dest.lstrip("-").isdigit() else (dest if dest else chat_id)
+        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        backup_copy = f"/tmp/license_backup_{ts}.db"
+        shutil.copy2(DB_PATH, backup_copy)
+        with open(backup_copy, "rb") as f:
+            bot.send_document(target, f, caption=f"💾 بکاپ دیتابیس - {ts}")
+        os.remove(backup_copy)
+        if target != chat_id:
+            bot.send_message(chat_id, f"✅ بکاپ به مقصد <code>{dest}</code> ارسال شد.", parse_mode="HTML")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ خطا در ارسال بکاپ: {e}")
 
 
 def _license_detail_text(lic: dict) -> str:
@@ -124,6 +146,68 @@ def register_admin_handlers(bot: telebot.TeleBot) -> None:
             f"📊 تعداد کل: <b>{total}</b>  |  صفحه {page}/{total_pages}"
         )
         _send_or_edit(bot, call, text, licenses_panel_keyboard(licenses, page, total_pages))
+        bot.answer_callback_query(call.id)
+
+    # ── Search licenses ───────────────────────────────────────────────────────
+
+    @bot.callback_query_handler(func=lambda c: c.data == "admin_lic_search")
+    def handle_search_start(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        set_state(call.from_user.id, States.ADMIN_WAITING_SEARCH_QUERY, {})
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_licenses"))
+        bot.send_message(
+            call.message.chat.id,
+            "🔍 <b>جستجوی لایسنس</b>\n\n"
+            "عبارت جستجو را وارد کنید:\n"
+            "• آیدی عددی لایسنس یا صاحب\n"
+            "• یوزرنیم صاحب (بدون @)\n"
+            "• یوزرنیم ربات (بدون @)\n\n"
+            "/cancel برای لغو",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_search_page_"))
+    def handle_search_page(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        parts = call.data.split("_")
+        page = int(parts[-1])
+        _, state_data = get_state(call.from_user.id)
+        query = state_data.get("search_query", "")
+        if not query:
+            bot.answer_callback_query(call.id, "❌ جستجو منقضی شده")
+            return
+        licenses, total = search_licenses(query, page, _LICENSES_PER_PAGE)
+        total_pages = max(1, (total + _LICENSES_PER_PAGE - 1) // _LICENSES_PER_PAGE)
+        _send_or_edit(
+            bot, call,
+            f"🔍 <b>نتایج جستجو: «{query}»</b>\n📊 تعداد: <b>{total}</b>  |  صفحه {page}/{total_pages}",
+            licenses_panel_keyboard(licenses, page, total_pages, search_mode=True),
+        )
+        bot.answer_callback_query(call.id)
+
+    # ── Page jump ─────────────────────────────────────────────────────────────
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_goto_page_"))
+    def handle_goto_page_start(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        prefix = call.data[len("admin_lic_goto_page_"):]
+        set_state(call.from_user.id, States.ADMIN_WAITING_PAGE_JUMP, {"prefix": prefix})
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔙 لغو", callback_data="admin_licenses"))
+        bot.send_message(
+            call.message.chat.id,
+            "📄 شماره صفحه مورد نظر را وارد کنید:",
+            reply_markup=kb,
+        )
         bot.answer_callback_query(call.id)
 
     # ── Inactive licenses list ────────────────────────────────────────────────
@@ -306,6 +390,22 @@ def register_admin_handlers(bot: telebot.TeleBot) -> None:
         )
         bot.answer_callback_query(call.id)
 
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_set_hours_"))
+    def handle_set_hours_start(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        license_id = int(call.data.split("_")[-1])
+        set_state(call.from_user.id, States.ADMIN_WAITING_SET_HOURS, {"license_id": license_id})
+        bot.send_message(
+            call.message.chat.id,
+            f"⏱ <b>ست کردن زمان دقیق لایسنس #{license_id}</b>\n\n"
+            "تعداد ساعت از الان را وارد کنید:\n"
+            "<i>(مثال: 720 = دقیقاً 30 روز از الان)</i>\n\n/cancel برای لغو",
+            parse_mode="HTML",
+        )
+        bot.answer_callback_query(call.id)
+
     # ── Edit fields ───────────────────────────────────────────────────────────
 
     @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_edit_") and not any(
@@ -416,55 +516,106 @@ def register_admin_handlers(bot: telebot.TeleBot) -> None:
         bot.send_message(call.message.chat.id, text, parse_mode="HTML")
         bot.answer_callback_query(call.id)
 
-    # ── Bots panel ────────────────────────────────────────────────────────────
+    # ── Backup panel ──────────────────────────────────────────────────────────
 
-    @bot.callback_query_handler(func=lambda c: c.data == "admin_bots")
-    def handle_admin_bots(call: telebot.types.CallbackQuery) -> None:
+    @bot.callback_query_handler(func=lambda c: c.data == "admin_backup")
+    def handle_backup_panel(call: telebot.types.CallbackQuery) -> None:
         if not _is_admin(call.from_user.id):
             bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
             return
-
-        conn = get_connection()
-        try:
-            rows = conn.execute(
-                """
-                SELECT bot_username,
-                       COUNT(*) AS total,
-                       SUM(CASE WHEN is_active = 1 AND expires_at > datetime('now') THEN 1 ELSE 0 END) AS active
-                FROM licenses
-                GROUP BY bot_username
-                ORDER BY bot_username
-                """
-            ).fetchall()
-        finally:
-            conn.close()
-
-        bots = [dict(r) for r in rows]
-        text = f"🤖 <b>مدیریت ربات‌ها</b>\nتعداد ربات‌های ثبت‌شده: <b>{len(bots)}</b>"
-        _send_or_edit(bot, call, text, bots_panel_keyboard(bots))
-        bot.answer_callback_query(call.id)
-
-    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_bot_view_"))
-    def handle_bot_view(call: telebot.types.CallbackQuery) -> None:
-        if not _is_admin(call.from_user.id):
-            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
-            return
-
-        bot_username = call.data[len("admin_bot_view_"):]
-        conn = get_connection()
-        try:
-            rows = conn.execute(
-                "SELECT * FROM licenses WHERE bot_username = ? ORDER BY created_at DESC",
-                (bot_username,),
-            ).fetchall()
-        finally:
-            conn.close()
-
-        licenses = [dict(r) for r in rows]
-        total_pages = max(1, (len(licenses) + _LICENSES_PER_PAGE - 1) // _LICENSES_PER_PAGE)
+        interval = get_setting("backup_interval_hours", "0")
+        dest = get_setting("backup_dest", "تنظیم نشده")
         _send_or_edit(
             bot, call,
-            f"🤖 <b>لایسنس‌های @{bot_username}</b>\nتعداد: {len(licenses)}",
-            licenses_panel_keyboard(licenses[:_LICENSES_PER_PAGE], 1, total_pages),
+            f"💾 <b>مدیریت بکاپ</b>\n\n"
+            f"⏰ بازه خودکار: <b>{interval} ساعت</b> (0 = غیرفعال)\n"
+            f"📬 مقصد: <code>{dest}</code>\n\n"
+            "یک گزینه انتخاب کنید:",
+            backup_panel_keyboard(),
         )
         bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda c: c.data == "admin_backup_now")
+    def handle_backup_now(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        bot.answer_callback_query(call.id, "⏳ در حال ارسال بکاپ...")
+        _do_send_backup(bot, call.message.chat.id)
+
+    @bot.callback_query_handler(func=lambda c: c.data == "admin_backup_restore")
+    def handle_backup_restore(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_backup"))
+        bot.send_message(
+            call.message.chat.id,
+            "♻️ <b>بازیابی بکاپ</b>\n\n"
+            "فایل بکاپ (db) را به عنوان Document ارسال کنید.\n\n/cancel برای لغو",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+        set_state(call.from_user.id, "admin_waiting_backup_file", {})
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda c: c.data == "admin_backup_set_interval")
+    def handle_backup_set_interval(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        set_state(call.from_user.id, States.ADMIN_WAITING_BACKUP_INTERVAL, {})
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_backup"))
+        bot.send_message(
+            call.message.chat.id,
+            "⏰ <b>بازه بکاپ خودکار</b>\n\n"
+            "تعداد ساعت بین هر بکاپ را وارد کنید:\n"
+            "<i>(0 برای غیرفعال کردن)</i>\n\n/cancel برای لغو",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda c: c.data == "admin_backup_set_dest")
+    def handle_backup_set_dest(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        set_state(call.from_user.id, States.ADMIN_WAITING_BACKUP_DEST, {})
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_backup"))
+        bot.send_message(
+            call.message.chat.id,
+            "📬 <b>مقصد بکاپ خودکار</b>\n\n"
+            "آیدی عددی یا آدرس کانال مقصد را وارد کنید:\n"
+            "<i>(مثال: @mychannel یا 123456789)</i>\n\n/cancel برای لغو",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+        bot.answer_callback_query(call.id)
+
+    # ── Document handler for backup restore ───────────────────────────────────
+
+    @bot.message_handler(
+        content_types=["document"],
+        func=lambda m: get_state(m.from_user.id)[0] == "admin_waiting_backup_file",
+    )
+    def handle_backup_file(message: telebot.types.Message) -> None:
+        if not _is_admin(message.from_user.id):
+            clear_state(message.from_user.id)
+            return
+        clear_state(message.from_user.id)
+        try:
+            file_info = bot.get_file(message.document.file_id)
+            file_bytes = bot.download_file(file_info.file_path)
+            backup_path = DB_PATH + ".restore_backup"
+            shutil.copy2(DB_PATH, backup_path)
+            with open(DB_PATH, "wb") as f:
+                f.write(file_bytes)
+            bot.send_message(message.chat.id, "✅ بکاپ با موفقیت بازیابی شد. ربات را ریستارت کنید.")
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطا در بازیابی: {e}")
+
+

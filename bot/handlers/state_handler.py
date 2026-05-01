@@ -7,10 +7,14 @@ from bot.states import States, get_state, set_state, clear_state
 from services.license_service import (
     create_license,
     adjust_license_hours,
+    set_license_time,
     update_license_field,
     get_license_by_id,
+    search_licenses,
+    get_all_licenses,
 )
 from services.settings_service import set_setting, get_setting
+from bot.keyboards.admin_kb import licenses_panel_keyboard
 from utils.helpers import sanitize_username, is_valid_telegram_id, format_datetime, shamsi_day_of_month
 
 logger = logging.getLogger(__name__)
@@ -278,3 +282,110 @@ def register_state_handlers(bot: telebot.TeleBot) -> None:
                 )
             else:
                 bot.send_message(message.chat.id, "❌ خطا در ویرایش.")
+
+        # ── Search licenses ────────────────────────────────────────────────
+        elif state == States.ADMIN_WAITING_SEARCH_QUERY:
+            if not _is_admin(user_id):
+                clear_state(user_id)
+                return
+            query = message.text.strip()
+            if not query:
+                bot.send_message(message.chat.id, "❌ عبارت جستجو نمی‌تواند خالی باشد.")
+                return
+            set_state(user_id, States.ADMIN_WAITING_SEARCH_QUERY, {"search_query": query})
+            licenses, total = search_licenses(query, 1, 10)
+            total_pages = max(1, (total + 10 - 1) // 10)
+            bot.send_message(
+                message.chat.id,
+                f"🔍 <b>نتایج جستجو: «{query}»</b>\n📊 تعداد: <b>{total}</b>  |  صفحه 1/{total_pages}",
+                parse_mode="HTML",
+                reply_markup=licenses_panel_keyboard(licenses, 1, total_pages, search_mode=True),
+            )
+
+        # ── Set exact time ─────────────────────────────────────────────────
+        elif state == States.ADMIN_WAITING_SET_HOURS:
+            if not _is_admin(user_id):
+                clear_state(user_id)
+                return
+            try:
+                hours = int(message.text.strip())
+                if hours < 0:
+                    raise ValueError
+            except ValueError:
+                bot.send_message(message.chat.id, "❌ عدد صحیح غیر منفی وارد کنید:")
+                return
+            license_id = data.get("license_id")
+            if not license_id:
+                bot.send_message(message.chat.id, "❌ خطا. دوباره امتحان کنید.")
+                clear_state(user_id)
+                return
+            updated = set_license_time(license_id, hours)
+            clear_state(user_id)
+            if updated:
+                bot.send_message(
+                    message.chat.id,
+                    f"✅ زمان لایسنس <b>#{license_id}</b> به <b>{hours}</b> ساعت از الان ست شد.\n"
+                    f"⏳ تاریخ انقضای جدید: <code>{format_datetime(updated['expires_at'])}</code>",
+                    parse_mode="HTML",
+                )
+            else:
+                bot.send_message(message.chat.id, "❌ خطا در بروزرسانی لایسنس.")
+
+        # ── Page jump ──────────────────────────────────────────────────────
+        elif state == States.ADMIN_WAITING_PAGE_JUMP:
+            if not _is_admin(user_id):
+                clear_state(user_id)
+                return
+            try:
+                page = int(message.text.strip())
+                if page < 1:
+                    raise ValueError
+            except ValueError:
+                bot.send_message(message.chat.id, "❌ عدد صفحه معتبر وارد کنید:")
+                return
+            clear_state(user_id)
+            licenses, total = get_all_licenses(page, 10)
+            total_pages = max(1, (total + 10 - 1) // 10)
+            page = min(page, total_pages)
+            licenses, total = get_all_licenses(page, 10)
+            bot.send_message(
+                message.chat.id,
+                f"📋 <b>مدیریت لایسنس‌ها</b>\n📊 تعداد کل: <b>{total}</b>  |  صفحه {page}/{total_pages}",
+                parse_mode="HTML",
+                reply_markup=licenses_panel_keyboard(licenses, page, total_pages),
+            )
+
+        # ── Backup interval ────────────────────────────────────────────────
+        elif state == States.ADMIN_WAITING_BACKUP_INTERVAL:
+            if not _is_admin(user_id):
+                clear_state(user_id)
+                return
+            try:
+                hours = int(message.text.strip())
+                if hours < 0:
+                    raise ValueError
+            except ValueError:
+                bot.send_message(message.chat.id, "❌ عدد صحیح غیر منفی وارد کنید:")
+                return
+            set_setting("backup_interval_hours", str(hours))
+            clear_state(user_id)
+            bot.send_message(
+                message.chat.id,
+                f"✅ بازه بکاپ خودکار به <b>{hours}</b> ساعت تنظیم شد." if hours > 0
+                else "✅ بکاپ خودکار غیرفعال شد.",
+                parse_mode="HTML",
+            )
+
+        # ── Backup destination ─────────────────────────────────────────────
+        elif state == States.ADMIN_WAITING_BACKUP_DEST:
+            if not _is_admin(user_id):
+                clear_state(user_id)
+                return
+            dest = message.text.strip()
+            set_setting("backup_dest", dest)
+            clear_state(user_id)
+            bot.send_message(
+                message.chat.id,
+                f"✅ مقصد بکاپ به <code>{dest}</code> تنظیم شد.",
+                parse_mode="HTML",
+            )

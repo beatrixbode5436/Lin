@@ -26,6 +26,19 @@ class States:
     ADMIN_WAITING_SUBSCRIPTION_TEXT = "admin_waiting_subscription_text"
     ADMIN_WAITING_START_TEXT        = "admin_waiting_start_text"
 
+    # ── Admin: Search Licenses ────────────────────────────────────────────────
+    ADMIN_WAITING_SEARCH_QUERY      = "admin_waiting_search_query"
+
+    # ── Admin: Set Time (exact) ───────────────────────────────────────────────
+    ADMIN_WAITING_SET_HOURS         = "admin_waiting_set_hours"
+
+    # ── Admin: Jump to page ───────────────────────────────────────────────────
+    ADMIN_WAITING_PAGE_JUMP         = "admin_waiting_page_jump"
+
+    # ── Admin: Backup settings ────────────────────────────────────────────────
+    ADMIN_WAITING_BACKUP_INTERVAL   = "admin_waiting_backup_interval"
+    ADMIN_WAITING_BACKUP_DEST       = "admin_waiting_backup_dest"
+
 
 def get_state(telegram_id: int) -> tuple[str | None, dict]:
     conn = get_connection()

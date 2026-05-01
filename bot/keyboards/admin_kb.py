@@ -7,7 +7,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb.add(
         InlineKeyboardButton("📝 تنظیم متن خرید اشتراک", callback_data="admin_set_sub_text"),
         InlineKeyboardButton("📋 مدیریت لایسنس‌ها",       callback_data="admin_licenses"),
-        InlineKeyboardButton("🤖 مدیریت ربات‌ها",          callback_data="admin_bots"),
+        InlineKeyboardButton("💾 بکاپ",                    callback_data="admin_backup"),
     )
     return kb
 
@@ -17,12 +17,16 @@ def licenses_panel_keyboard(
     page: int = 1,
     total_pages: int = 1,
     inactive_mode: bool = False,
+    search_mode: bool = False,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
-        InlineKeyboardButton("➕ اضافه کردن لایسنس", callback_data="admin_add_license")
+        InlineKeyboardButton("➕ اضافه کردن لایسنس", callback_data="admin_add_license"),
+        InlineKeyboardButton("🔍 جستجو",              callback_data="admin_lic_search"),
     )
-    if not inactive_mode:
+    if search_mode:
+        kb.add(InlineKeyboardButton("✅ همه لایسنس‌ها", callback_data="admin_licenses"))
+    elif not inactive_mode:
         kb.add(
             InlineKeyboardButton("🔴 لایسنس‌های غیرفعال", callback_data="admin_inactive_licenses_1")
         )
@@ -40,9 +44,16 @@ def licenses_panel_keyboard(
         )
 
     nav: list[InlineKeyboardButton] = []
-    prefix = "admin_inactive_lic_page_" if inactive_mode else "admin_lic_page_"
+    if search_mode:
+        prefix = "admin_lic_search_page_"
+    elif inactive_mode:
+        prefix = "admin_inactive_lic_page_"
+    else:
+        prefix = "admin_lic_page_"
+
     if page > 1:
         nav.append(InlineKeyboardButton("◀️ قبلی", callback_data=f"{prefix}{page - 1}"))
+    nav.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data=f"admin_lic_goto_page_{prefix}"))
     if page < total_pages:
         nav.append(InlineKeyboardButton("بعدی ▶️", callback_data=f"{prefix}{page + 1}"))
     if nav:
@@ -84,6 +95,9 @@ def license_time_management_keyboard(license_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("➕ اضافه کردن ساعت", callback_data=f"admin_lic_add_hours_{lid}"),
         InlineKeyboardButton("➖ کم کردن ساعت",    callback_data=f"admin_lic_sub_hours_{lid}"),
     )
+    kb.add(
+        InlineKeyboardButton("⏱ ست کردن زمان دقیق", callback_data=f"admin_lic_set_hours_{lid}"),
+    )
     kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data=f"admin_lic_view_{lid}"))
     return kb
 
@@ -109,5 +123,17 @@ def bots_panel_keyboard(bots: list[dict]) -> InlineKeyboardMarkup:
                 callback_data=f"admin_bot_view_{bot['bot_username']}",
             )
         )
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
+    return kb
+
+
+def backup_panel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("📦 بکاپ دستی الان",          callback_data="admin_backup_now"),
+        InlineKeyboardButton("♻️ بازیابی بکاپ",             callback_data="admin_backup_restore"),
+        InlineKeyboardButton("⏰ زمان بکاپ خودکار (ساعت)", callback_data="admin_backup_set_interval"),
+        InlineKeyboardButton("📬 مقصد بکاپ خودکار",        callback_data="admin_backup_set_dest"),
+    )
     kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
     return kb
