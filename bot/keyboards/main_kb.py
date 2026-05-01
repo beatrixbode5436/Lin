@@ -1,12 +1,15 @@
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import ADMIN_IDS
 
 
-def main_menu_keyboard(telegram_id: int, has_licenses: bool = False) -> ReplyKeyboardMarkup:
-    kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    kb.add(KeyboardButton("🛒 خرید اشتراک"), KeyboardButton("📢 کانال اطلاع رسانی"))
+def main_menu_keyboard(telegram_id: int, has_licenses: bool = False) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("🛒 خرید اشتراک",        callback_data="main_buy"),
+        InlineKeyboardButton("📢 کانال اطلاع رسانی",  callback_data="main_channel"),
+    )
     if has_licenses:
-        kb.add(KeyboardButton("📋 لایسنس های من"))
+        kb.add(InlineKeyboardButton("📋 لایسنس های من", callback_data="main_licenses"))
     if telegram_id in ADMIN_IDS:
-        kb.add(KeyboardButton("⚙️ پنل مدیریت"))
+        kb.add(InlineKeyboardButton("⚙️ پنل مدیریت", callback_data="main_admin"))
     return kb

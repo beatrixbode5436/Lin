@@ -13,8 +13,14 @@ class States:
     ADMIN_WAITING_OWNER_ID       = "admin_waiting_owner_id"
     ADMIN_WAITING_DURATION       = "admin_waiting_duration"
 
-    # ── Admin Wizard: Extend License ──────────────────────────────────────────
-    ADMIN_WAITING_EXTEND_HOURS   = "admin_waiting_extend_hours"
+    # ── Admin Wizard: Time Management ─────────────────────────────────────────
+    ADMIN_WAITING_ADD_HOURS      = "admin_waiting_add_hours"
+    ADMIN_WAITING_SUB_HOURS      = "admin_waiting_sub_hours"
+
+    # ── Admin Wizard: Edit License Fields ─────────────────────────────────────
+    ADMIN_WAITING_EDIT_OWNER_USERNAME = "admin_waiting_edit_owner_username"
+    ADMIN_WAITING_EDIT_OWNER_ID       = "admin_waiting_edit_owner_id"
+    ADMIN_WAITING_EDIT_BOT_USERNAME   = "admin_waiting_edit_bot_username"
 
     # ── Admin: Edit Settings ──────────────────────────────────────────────────
     ADMIN_WAITING_SUBSCRIPTION_TEXT = "admin_waiting_subscription_text"

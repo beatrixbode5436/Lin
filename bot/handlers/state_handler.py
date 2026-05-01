@@ -1,11 +1,17 @@
 import logging
 import telebot
+from datetime import datetime
 
 from config import ADMIN_IDS, API_BASE_URL
 from bot.states import States, get_state, set_state, clear_state
-from services.license_service import create_license, extend_license
+from services.license_service import (
+    create_license,
+    adjust_license_hours,
+    update_license_field,
+    get_license_by_id,
+)
 from services.settings_service import set_setting, get_setting
-from utils.helpers import sanitize_username, is_valid_telegram_id, format_datetime
+from utils.helpers import sanitize_username, is_valid_telegram_id, format_datetime, shamsi_day_of_month
 
 logger = logging.getLogger(__name__)
 
@@ -120,27 +126,36 @@ def register_state_handlers(bot: telebot.TeleBot) -> None:
                 return
 
             clear_state(user_id)
-            api_url = get_setting("api_base_url", API_BASE_URL)
+
+            try:
+                expiry_dt = datetime.fromisoformat(lic["expires_at"])
+                gregorian_day = expiry_dt.day
+                jalali_day = shamsi_day_of_month(expiry_dt)
+            except Exception:
+                gregorian_day = "؟"
+                jalali_day = "؟"
 
             result_text = (
-                "✅ <b>لایسنس با موفقیت ایجاد شد!</b>\n"
-                "━━━━━━━━━━━━━━━━━━\n\n"
+                "✅ <b>لایسنس با موفقیت ایجاد شد!</b>\n\n"
+                "🔑 اطلاعات لایسنس شما به شرح زیر می‌باشد.\n\n"
+                "برای فعال‌سازی لایسنس، لطفاً وارد پنل مدیریت شوید و از بخش «🔐 فعال‌سازی لایسنس» اطلاعات زیر را ارسال نمایید تا لایسنس ربات شما فعال گردد.\n\n"
+                "⚠️ همچنین لطفاً حتماً ربات مدیریت لایسنس زیر را نیز استارت کنید:\n"
+                "@license_Seamless_BOT\n\n"
                 f"🤖 Bot Username: @{lic['bot_username']}\n"
                 f"👤 Owner Username: @{lic['owner_username']}\n"
-                f"🆔 Owner Telegram ID: <code>{lic['owner_telegram_id']}</code>\n"
-                f"🔑 API Key: <code>{lic['api_key']}</code>\n"
-                f"📅 Expiry Date: {format_datetime(lic['expires_at'])}\n"
-                f"🌐 API URL: <code>{api_url}</code>\n\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "📤 <b>متن آماده برای مشتری:</b>\n"
-                "━━━━━━━━━━━━━━━━━━\n\n"
-                f"🔑 API Key لایسنس شما:\n<code>{lic['api_key']}</code>\n\n"
-                f"🌐 API URL:\n<code>{api_url}</code>"
+                f"🆔 Owner Telegram ID: {lic['owner_telegram_id']}\n\n"
+                f"🔑 API Key لایسنس شما:\n"
+                f"<code>{lic['api_key']}</code>\n\n"
+                f"🌐 API URL:\n"
+                f"<code>http://209.50.228.1:5000/api/license</code>\n\n"
+                f"📅 تاریخ تمدید:\n"
+                f"• روز {gregorian_day} هر ماه میلادی\n"
+                f"• روز {jalali_day} هر ماه شمسی"
             )
             bot.send_message(message.chat.id, result_text, parse_mode="HTML")
 
-        # ── Extend hours ───────────────────────────────────────────────────
-        elif state == States.ADMIN_WAITING_EXTEND_HOURS:
+        # ── Add hours ──────────────────────────────────────────────────────
+        elif state == States.ADMIN_WAITING_ADD_HOURS:
             if not _is_admin(user_id):
                 clear_state(user_id)
                 return
@@ -158,14 +173,108 @@ def register_state_handlers(bot: telebot.TeleBot) -> None:
                 clear_state(user_id)
                 return
 
-            updated = extend_license(license_id, hours)
+            updated = adjust_license_hours(license_id, hours)
             clear_state(user_id)
             if updated:
                 bot.send_message(
                     message.chat.id,
-                    f"✅ لایسنس <b>#{license_id}</b> به مدت <b>{hours}</b> ساعت تمدید شد.\n"
+                    f"✅ <b>{hours}</b> ساعت به لایسنس <b>#{license_id}</b> اضافه شد.\n"
                     f"⏳ تاریخ انقضای جدید: <code>{format_datetime(updated['expires_at'])}</code>",
                     parse_mode="HTML",
                 )
             else:
-                bot.send_message(message.chat.id, "❌ خطا در تمدید لایسنس.")
+                bot.send_message(message.chat.id, "❌ خطا در بروزرسانی لایسنس.")
+
+        # ── Subtract hours ─────────────────────────────────────────────────
+        elif state == States.ADMIN_WAITING_SUB_HOURS:
+            if not _is_admin(user_id):
+                clear_state(user_id)
+                return
+            try:
+                hours = int(message.text.strip())
+                if hours <= 0:
+                    raise ValueError
+            except ValueError:
+                bot.send_message(message.chat.id, "❌ عدد صحیح مثبت وارد کنید:")
+                return
+
+            license_id = data.get("license_id")
+            if not license_id:
+                bot.send_message(message.chat.id, "❌ خطا. دوباره امتحان کنید.")
+                clear_state(user_id)
+                return
+
+            updated = adjust_license_hours(license_id, -hours)
+            clear_state(user_id)
+            if updated:
+                bot.send_message(
+                    message.chat.id,
+                    f"✅ <b>{hours}</b> ساعت از لایسنس <b>#{license_id}</b> کم شد.\n"
+                    f"⏳ تاریخ انقضای جدید: <code>{format_datetime(updated['expires_at'])}</code>",
+                    parse_mode="HTML",
+                )
+            else:
+                bot.send_message(message.chat.id, "❌ خطا در بروزرسانی لایسنس.")
+
+        # ── Edit owner username ────────────────────────────────────────────
+        elif state == States.ADMIN_WAITING_EDIT_OWNER_USERNAME:
+            if not _is_admin(user_id):
+                clear_state(user_id)
+                return
+            new_val = sanitize_username(message.text)
+            if not new_val:
+                bot.send_message(message.chat.id, "❌ یوزرنیم نامعتبر است. دوباره وارد کنید:")
+                return
+            license_id = data.get("license_id")
+            updated = update_license_field(license_id, "owner_username", new_val)
+            clear_state(user_id)
+            if updated:
+                bot.send_message(
+                    message.chat.id,
+                    f"✅ یوزرنیم خریدار به <code>@{new_val}</code> تغییر یافت.",
+                    parse_mode="HTML",
+                )
+            else:
+                bot.send_message(message.chat.id, "❌ خطا در ویرایش.")
+
+        # ── Edit owner telegram ID ─────────────────────────────────────────
+        elif state == States.ADMIN_WAITING_EDIT_OWNER_ID:
+            if not _is_admin(user_id):
+                clear_state(user_id)
+                return
+            val = message.text.strip()
+            if not is_valid_telegram_id(val):
+                bot.send_message(message.chat.id, "❌ آیدی نامعتبر. فقط عدد وارد کنید:")
+                return
+            license_id = data.get("license_id")
+            updated = update_license_field(license_id, "owner_telegram_id", val)
+            clear_state(user_id)
+            if updated:
+                bot.send_message(
+                    message.chat.id,
+                    f"✅ آیدی عددی خریدار به <code>{val}</code> تغییر یافت.",
+                    parse_mode="HTML",
+                )
+            else:
+                bot.send_message(message.chat.id, "❌ خطا در ویرایش.")
+
+        # ── Edit bot username ──────────────────────────────────────────────
+        elif state == States.ADMIN_WAITING_EDIT_BOT_USERNAME:
+            if not _is_admin(user_id):
+                clear_state(user_id)
+                return
+            new_val = sanitize_username(message.text)
+            if not new_val:
+                bot.send_message(message.chat.id, "❌ یوزرنیم نامعتبر است. دوباره وارد کنید:")
+                return
+            license_id = data.get("license_id")
+            updated = update_license_field(license_id, "bot_username", new_val)
+            clear_state(user_id)
+            if updated:
+                bot.send_message(
+                    message.chat.id,
+                    f"✅ یوزرنیم ربات به <code>@{new_val}</code> تغییر یافت.",
+                    parse_mode="HTML",
+                )
+            else:
+                bot.send_message(message.chat.id, "❌ خطا در ویرایش.")

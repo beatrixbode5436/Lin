@@ -50,17 +50,24 @@ def _build_licenses_page(
 
 def register_user_handlers(bot: telebot.TeleBot) -> None:
 
-    @bot.message_handler(func=lambda m: m.text == "📋 لایسنس های من")
-    def handle_my_licenses(message: telebot.types.Message) -> None:
-        user_id = message.from_user.id
+    @bot.callback_query_handler(func=lambda c: c.data == "main_licenses")
+    def handle_my_licenses(call: telebot.types.CallbackQuery) -> None:
+        user_id = call.from_user.id
         licenses = get_licenses_by_owner(user_id)
 
         if not licenses:
-            bot.send_message(message.chat.id, "❌ شما هیچ لایسنس ثبت‌شده‌ای ندارید.")
+            bot.answer_callback_query(call.id, "❌ شما هیچ لایسنس ثبت‌شده‌ای ندارید")
             return
 
         text, kb, _, _ = _build_licenses_page(licenses, user_id, 1)
-        bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="HTML")
+        try:
+            bot.edit_message_text(
+                text, call.message.chat.id, call.message.message_id,
+                reply_markup=kb, parse_mode="HTML",
+            )
+        except Exception:
+            bot.send_message(call.message.chat.id, text, reply_markup=kb, parse_mode="HTML")
+        bot.answer_callback_query(call.id)
 
     @bot.callback_query_handler(func=lambda c: c.data.startswith("user_lic_page_"))
     def handle_user_page(call: telebot.types.CallbackQuery) -> None:

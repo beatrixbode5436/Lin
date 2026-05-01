@@ -7,19 +7,25 @@ from bot.keyboards.admin_kb import (
     admin_panel_keyboard,
     licenses_panel_keyboard,
     license_detail_keyboard,
+    license_time_management_keyboard,
+    license_edit_keyboard,
     bots_panel_keyboard,
 )
 from bot.states import States, get_state, set_state, clear_state
 from services.license_service import (
     get_all_licenses,
+    get_inactive_licenses,
     get_license_by_id,
     update_license_status,
+    update_license_field,
     delete_license,
     rotate_api_key,
+    adjust_license_hours,
 )
 from services.settings_service import get_setting, set_setting
 from database.db import get_connection
-from utils.helpers import calculate_remaining, format_datetime
+from utils.helpers import calculate_remaining, format_datetime, shamsi_day_of_month
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -68,20 +74,8 @@ def register_admin_handlers(bot: telebot.TeleBot) -> None:
 
     # ── Panel entry ───────────────────────────────────────────────────────────
 
-    @bot.message_handler(func=lambda m: m.text == "⚙️ پنل مدیریت")
-    def handle_admin_panel(message: telebot.types.Message) -> None:
-        if not _is_admin(message.from_user.id):
-            bot.send_message(message.chat.id, "❌ شما دسترسی ندارید.")
-            return
-        bot.send_message(
-            message.chat.id,
-            "⚙️ <b>پنل مدیریت</b>\n\nیکی از گزینه‌ها را انتخاب کنید:",
-            reply_markup=admin_panel_keyboard(),
-            parse_mode="HTML",
-        )
-
-    @bot.callback_query_handler(func=lambda c: c.data == "admin_back")
-    def handle_admin_back(call: telebot.types.CallbackQuery) -> None:
+    @bot.callback_query_handler(func=lambda c: c.data in ("main_admin", "admin_back"))
+    def handle_admin_panel(call: telebot.types.CallbackQuery) -> None:
         if not _is_admin(call.from_user.id):
             bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
             return
@@ -132,6 +126,29 @@ def register_admin_handlers(bot: telebot.TeleBot) -> None:
         _send_or_edit(bot, call, text, licenses_panel_keyboard(licenses, page, total_pages))
         bot.answer_callback_query(call.id)
 
+    # ── Inactive licenses list ────────────────────────────────────────────────
+
+    @bot.callback_query_handler(
+        func=lambda c: c.data.startswith("admin_inactive_licenses_") or c.data.startswith("admin_inactive_lic_page_")
+    )
+    def handle_inactive_licenses(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+
+        page = int(call.data.split("_")[-1])
+        licenses, total = get_inactive_licenses(page, _LICENSES_PER_PAGE)
+        total_pages = max(1, (total + _LICENSES_PER_PAGE - 1) // _LICENSES_PER_PAGE)
+        text = (
+            f"🔴 <b>لایسنس‌های غیرفعال</b>\n"
+            f"📊 تعداد: <b>{total}</b>  |  صفحه {page}/{total_pages}"
+        )
+        _send_or_edit(
+            bot, call, text,
+            licenses_panel_keyboard(licenses, page, total_pages, inactive_mode=True),
+        )
+        bot.answer_callback_query(call.id)
+
     # ── Add license wizard (start) ────────────────────────────────────────────
 
     @bot.callback_query_handler(func=lambda c: c.data == "admin_add_license")
@@ -163,36 +180,28 @@ def register_admin_handlers(bot: telebot.TeleBot) -> None:
         if not lic:
             bot.answer_callback_query(call.id, "❌ لایسنس یافت نشد")
             return
-        _send_or_edit(bot, call, _license_detail_text(lic), license_detail_keyboard(license_id))
+        _send_or_edit(bot, call, _license_detail_text(lic), license_detail_keyboard(license_id, bool(lic["is_active"])))
         bot.answer_callback_query(call.id)
 
-    # ── Disable ───────────────────────────────────────────────────────────────
+    # ── Toggle activate/deactivate ────────────────────────────────────────────
 
-    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_dis_"))
-    def handle_disable(call: telebot.types.CallbackQuery) -> None:
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_toggle_"))
+    def handle_toggle(call: telebot.types.CallbackQuery) -> None:
         if not _is_admin(call.from_user.id):
             bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
             return
         license_id = int(call.data.split("_")[-1])
-        update_license_status(license_id, False, "disabled")
-        bot.answer_callback_query(call.id, "✅ لایسنس غیرفعال شد")
         lic = get_license_by_id(license_id)
-        if lic:
-            _send_or_edit(bot, call, _license_detail_text(lic), license_detail_keyboard(license_id))
-
-    # ── Enable ────────────────────────────────────────────────────────────────
-
-    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_ena_"))
-    def handle_enable(call: telebot.types.CallbackQuery) -> None:
-        if not _is_admin(call.from_user.id):
-            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+        if not lic:
+            bot.answer_callback_query(call.id, "❌ لایسنس یافت نشد")
             return
-        license_id = int(call.data.split("_")[-1])
-        update_license_status(license_id, True, "active")
-        bot.answer_callback_query(call.id, "✅ لایسنس فعال شد")
+        new_active = not bool(lic["is_active"])
+        update_license_status(license_id, new_active)
+        msg = "✅ لایسنس فعال شد" if new_active else "🔴 لایسنس غیرفعال شد"
+        bot.answer_callback_query(call.id, msg)
         lic = get_license_by_id(license_id)
         if lic:
-            _send_or_edit(bot, call, _license_detail_text(lic), license_detail_keyboard(license_id))
+            _send_or_edit(bot, call, _license_detail_text(lic), license_detail_keyboard(license_id, bool(lic["is_active"])))
 
     # ── Delete (confirm) ──────────────────────────────────────────────────────
 
@@ -243,22 +252,126 @@ def register_admin_handlers(bot: telebot.TeleBot) -> None:
         bot.answer_callback_query(call.id, "🔑 API Key جدید تولید شد")
         lic = get_license_by_id(license_id)
         if lic:
-            _send_or_edit(bot, call, _license_detail_text(lic), license_detail_keyboard(license_id))
+            _send_or_edit(bot, call, _license_detail_text(lic), license_detail_keyboard(license_id, bool(lic["is_active"])))
 
-    # ── Extend (start wizard) ─────────────────────────────────────────────────
+    # ── Time management ───────────────────────────────────────────────────────
 
-    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_ext_"))
-    def handle_extend_start(call: telebot.types.CallbackQuery) -> None:
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_time_"))
+    def handle_time_management(call: telebot.types.CallbackQuery) -> None:
         if not _is_admin(call.from_user.id):
             bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
             return
         license_id = int(call.data.split("_")[-1])
-        set_state(call.from_user.id, States.ADMIN_WAITING_EXTEND_HOURS, {"license_id": license_id})
+        lic = get_license_by_id(license_id)
+        if not lic:
+            bot.answer_callback_query(call.id, "❌ لایسنس یافت نشد")
+            return
+        _, time_str = calculate_remaining(lic["expires_at"])
+        _send_or_edit(
+            bot, call,
+            f"🕐 <b>مدیریت زمان لایسنس #{license_id}</b>\n\n"
+            f"⌛ زمان باقی‌مانده: <b>{time_str}</b>\n\n"
+            "یک گزینه انتخاب کنید:",
+            license_time_management_keyboard(license_id),
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_add_hours_"))
+    def handle_add_hours_start(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        license_id = int(call.data.split("_")[-1])
+        set_state(call.from_user.id, States.ADMIN_WAITING_ADD_HOURS, {"license_id": license_id})
         bot.send_message(
             call.message.chat.id,
-            f"🔁 <b>تمدید لایسنس #{license_id}</b>\n\n"
-            "⏱ تعداد ساعت برای تمدید را وارد کنید:\n"
-            "<i>(مثال: 720 = 30 روز)</i>\n\n/cancel برای لغو",
+            f"➕ <b>اضافه کردن ساعت به لایسنس #{license_id}</b>\n\n"
+            "⏱ تعداد ساعت را وارد کنید:\n<i>(مثال: 720 = 30 روز)</i>\n\n/cancel برای لغو",
+            parse_mode="HTML",
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_sub_hours_"))
+    def handle_sub_hours_start(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        license_id = int(call.data.split("_")[-1])
+        set_state(call.from_user.id, States.ADMIN_WAITING_SUB_HOURS, {"license_id": license_id})
+        bot.send_message(
+            call.message.chat.id,
+            f"➖ <b>کم کردن ساعت از لایسنس #{license_id}</b>\n\n"
+            "⏱ تعداد ساعت را وارد کنید:\n<i>(مثال: 24 = 1 روز)</i>\n\n/cancel برای لغو",
+            parse_mode="HTML",
+        )
+        bot.answer_callback_query(call.id)
+
+    # ── Edit fields ───────────────────────────────────────────────────────────
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_edit_") and not any(
+        c.data.startswith(f"admin_lic_edit_{x}_") for x in ("oun", "oid", "bun")
+    ))
+    def handle_edit_menu(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        license_id = int(call.data.split("_")[-1])
+        lic = get_license_by_id(license_id)
+        if not lic:
+            bot.answer_callback_query(call.id, "❌ لایسنس یافت نشد")
+            return
+        _send_or_edit(
+            bot, call,
+            f"✏️ <b>ویرایش لایسنس #{license_id}</b>\n\n"
+            f"🤖 Bot: @{lic['bot_username']}\n"
+            f"👤 Owner: @{lic['owner_username']}\n"
+            f"🆔 ID: <code>{lic['owner_telegram_id']}</code>\n\n"
+            "کدام فیلد را ویرایش می‌کنید؟",
+            license_edit_keyboard(license_id),
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_edit_oun_"))
+    def handle_edit_owner_username(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        license_id = int(call.data.split("_")[-1])
+        set_state(call.from_user.id, States.ADMIN_WAITING_EDIT_OWNER_USERNAME, {"license_id": license_id})
+        bot.send_message(
+            call.message.chat.id,
+            f"👤 <b>ویرایش یوزرنیم خریدار - لایسنس #{license_id}</b>\n\n"
+            "یوزرنیم جدید را وارد کنید:\n/cancel برای لغو",
+            parse_mode="HTML",
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_edit_oid_"))
+    def handle_edit_owner_id(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        license_id = int(call.data.split("_")[-1])
+        set_state(call.from_user.id, States.ADMIN_WAITING_EDIT_OWNER_ID, {"license_id": license_id})
+        bot.send_message(
+            call.message.chat.id,
+            f"🆔 <b>ویرایش آیدی عددی خریدار - لایسنس #{license_id}</b>\n\n"
+            "آیدی عددی جدید را وارد کنید:\n/cancel برای لغو",
+            parse_mode="HTML",
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_lic_edit_bun_"))
+    def handle_edit_bot_username(call: telebot.types.CallbackQuery) -> None:
+        if not _is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ دسترسی ندارید")
+            return
+        license_id = int(call.data.split("_")[-1])
+        set_state(call.from_user.id, States.ADMIN_WAITING_EDIT_BOT_USERNAME, {"license_id": license_id})
+        bot.send_message(
+            call.message.chat.id,
+            f"🤖 <b>ویرایش یوزرنیم ربات - لایسنس #{license_id}</b>\n\n"
+            "یوزرنیم جدید ربات را وارد کنید:\n/cancel برای لغو",
             parse_mode="HTML",
         )
         bot.answer_callback_query(call.id)
@@ -276,16 +389,29 @@ def register_admin_handlers(bot: telebot.TeleBot) -> None:
             bot.answer_callback_query(call.id, "❌ لایسنس یافت نشد")
             return
 
-        api_url = get_setting("api_base_url", API_BASE_URL)
+        try:
+            expiry_dt = datetime.fromisoformat(lic["expires_at"])
+            gregorian_day = expiry_dt.day
+            jalali_day = shamsi_day_of_month(expiry_dt)
+        except Exception:
+            gregorian_day = "؟"
+            jalali_day = "؟"
+
         text = (
-            "📤 <b>متن آماده برای مشتری:</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            f"🔑 <b>API Key لایسنس شما:</b>\n"
+            "🔑 اطلاعات لایسنس شما به شرح زیر می‌باشد.\n\n"
+            "برای فعال‌سازی لایسنس، لطفاً وارد پنل مدیریت شوید و از بخش «🔐 فعال‌سازی لایسنس» اطلاعات زیر را ارسال نمایید تا لایسنس ربات شما فعال گردد.\n\n"
+            "⚠️ همچنین لطفاً حتماً ربات مدیریت لایسنس زیر را نیز استارت کنید:\n"
+            "@license_Seamless_BOT\n\n"
+            f"🤖 Bot Username: @{lic['bot_username']}\n"
+            f"👤 Owner Username: @{lic['owner_username']}\n"
+            f"🆔 Owner Telegram ID: {lic['owner_telegram_id']}\n\n"
+            f"🔑 API Key لایسنس شما:\n"
             f"<code>{lic['api_key']}</code>\n\n"
-            f"🌐 <b>API URL:</b>\n"
-            f"<code>{api_url}</code>\n\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "برای فعال‌سازی ربات، این API Key را در تنظیمات ربات خود وارد کنید."
+            f"🌐 API URL:\n"
+            f"<code>http://209.50.228.1:5000/api/license</code>\n\n"
+            f"📅 تاریخ تمدید:\n"
+            f"• روز {gregorian_day} هر ماه میلادی\n"
+            f"• روز {jalali_day} هر ماه شمسی"
         )
         bot.send_message(call.message.chat.id, text, parse_mode="HTML")
         bot.answer_callback_query(call.id)

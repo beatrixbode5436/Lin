@@ -103,11 +103,67 @@ def get_all_licenses(page: int = 1, per_page: int = 10) -> tuple[list[dict], int
     try:
         offset = (page - 1) * per_page
         rows = conn.execute(
-            "SELECT * FROM licenses ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM licenses ORDER BY expires_at ASC LIMIT ? OFFSET ?",
             (per_page, offset),
         ).fetchall()
         total = conn.execute("SELECT COUNT(*) FROM licenses").fetchone()[0]
         return [dict(r) for r in rows], total
+    finally:
+        conn.close()
+
+
+def get_inactive_licenses(page: int = 1, per_page: int = 10) -> tuple[list[dict], int]:
+    conn = get_connection()
+    try:
+        offset = (page - 1) * per_page
+        rows = conn.execute(
+            "SELECT * FROM licenses WHERE is_active = 0 ORDER BY expires_at ASC LIMIT ? OFFSET ?",
+            (per_page, offset),
+        ).fetchall()
+        total = conn.execute(
+            "SELECT COUNT(*) FROM licenses WHERE is_active = 0"
+        ).fetchone()[0]
+        return [dict(r) for r in rows], total
+    finally:
+        conn.close()
+
+
+def update_license_field(license_id: int, field: str, value: str) -> dict | None:
+    allowed = {"bot_username", "owner_username", "owner_telegram_id"}
+    if field not in allowed:
+        raise ValueError(f"Field '{field}' is not editable")
+    conn = get_connection()
+    try:
+        conn.execute(
+            f"UPDATE licenses SET {field} = ?, updated_at = ? WHERE id = ?",
+            (value, datetime.utcnow().isoformat(), license_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM licenses WHERE id = ?", (license_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def adjust_license_hours(license_id: int, hours: int) -> dict | None:
+    """Add (hours > 0) or subtract (hours < 0) from license expiry."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM licenses WHERE id = ?", (license_id,)
+        ).fetchone()
+        if not row:
+            return None
+        now = datetime.utcnow()
+        current_expiry = datetime.fromisoformat(row["expires_at"])
+        new_expiry = current_expiry + timedelta(hours=hours)
+        conn.execute(
+            "UPDATE licenses SET expires_at = ?, updated_at = ? WHERE id = ?",
+            (new_expiry.isoformat(), now.isoformat(), license_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM licenses WHERE id = ?", (license_id,)).fetchone()
+        return dict(row)
     finally:
         conn.close()
 
@@ -209,9 +265,6 @@ def activate_license(
         if lic["bot_username"] != bot_username.lower().lstrip("@"):
             return _mismatch_response("Bot username mismatch")
 
-        if str(lic["owner_telegram_id"]) != str(owner_telegram_id):
-            return _mismatch_response("Owner Telegram ID mismatch")
-
         if lic["owner_username"] != owner_username.lower().lstrip("@"):
             return _mismatch_response("Owner username mismatch")
 
@@ -290,10 +343,6 @@ def check_license(
         if lic["bot_username"] != bot_username.lower().lstrip("@"):
             return _check_fail("mismatch", "Bot username mismatch",
                                "❌ خطا در تطبیق اطلاعات ربات", subscription_text)
-
-        if str(lic["owner_telegram_id"]) != str(owner_telegram_id):
-            return _check_fail("mismatch", "Owner ID mismatch",
-                               "❌ خطا در تطبیق شناسه مالک", subscription_text)
 
         if lic["owner_username"] != owner_username.lower().lstrip("@"):
             return _check_fail("mismatch", "Owner username mismatch",
