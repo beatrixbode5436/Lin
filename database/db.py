@@ -94,5 +94,13 @@ def init_db() -> None:
         """)
         conn.commit()
         logger.info("Database initialized successfully at %s", DB_PATH)
+
+        # ── Migrations (add new columns safely) ───────────────────────────
+        try:
+            conn.execute("ALTER TABLE licenses ADD COLUMN last_ping_at TIMESTAMP")
+            conn.commit()
+            logger.info("Migration: added last_ping_at column to licenses")
+        except Exception:
+            pass  # Column already exists
     finally:
         conn.close()

@@ -416,6 +416,14 @@ def check_license(
             )
 
         remaining_hours = int((expires_at - now).total_seconds() / 3600)
+
+        # Track last successful API ping
+        conn.execute(
+            "UPDATE licenses SET last_ping_at = ?, updated_at = ? WHERE id = ?",
+            (now.isoformat(), now.isoformat(), lic["id"]),
+        )
+        conn.commit()
+
         return {
             "ok": True, "is_licensed": True, "status": "active",
             "expires_at": lic["expires_at"],
@@ -439,6 +447,7 @@ def get_expiry_notify_text() -> str:
 
 
 def get_expired_licenses_for_notification() -> list[dict]:
+    """Return truly expired/disabled licenses that need an expiry notification."""
     conn = get_connection()
     try:
         now = datetime.utcnow()
@@ -446,12 +455,64 @@ def get_expired_licenses_for_notification() -> list[dict]:
         rows = conn.execute(
             """
             SELECT * FROM licenses
-            WHERE (status = 'expired' OR is_active = 0 OR expires_at < ?)
+            WHERE (status = 'expired' OR is_active = 0)
               AND (last_notified_at IS NULL OR last_notified_at < ?)
             """,
-            (now.isoformat(), one_hour_ago),
+            (one_hour_ago,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_active_licenses_for_ping(interval_minutes: int = 15) -> list[dict]:
+    """Return active, non-expired licenses that haven't been confirmed in interval_minutes."""
+    conn = get_connection()
+    try:
+        now = datetime.utcnow()
+        cutoff = (now - timedelta(minutes=interval_minutes)).isoformat()
+        rows = conn.execute(
+            """
+            SELECT * FROM licenses
+            WHERE is_active = 1
+              AND status = 'active'
+              AND expires_at > ?
+              AND (last_ping_at IS NULL OR last_ping_at < ?)
+            """,
+            (now.isoformat(), cutoff),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_licenses_to_auto_deactivate(hours: int = 12) -> list[dict]:
+    """Return active licenses that have been expired for more than `hours` hours."""
+    conn = get_connection()
+    try:
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        rows = conn.execute(
+            """
+            SELECT * FROM licenses
+            WHERE is_active = 1
+              AND expires_at < ?
+            """,
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_last_ping(license_id: int) -> None:
+    """Mark a license as pinged now (active confirmation sent)."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE licenses SET last_ping_at = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), license_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -464,6 +525,158 @@ def update_last_notified(license_id: int) -> None:
             (datetime.utcnow().isoformat(), license_id),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── User Management ──────────────────────────────────────────────────────────
+
+def get_user_stats() -> dict:
+    """Return total users, users with licenses, and users without licenses."""
+    conn = get_connection()
+    try:
+        total_users = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
+        licensed_ids = conn.execute(
+            "SELECT COUNT(DISTINCT owner_telegram_id) FROM licenses"
+        ).fetchone()[0]
+        unlicensed = max(0, total_users - licensed_ids)
+        return {
+            "total": total_users,
+            "licensed": licensed_ids,
+            "unlicensed": unlicensed,
+        }
+    finally:
+        conn.close()
+
+
+def get_all_users(page: int = 1, per_page: int = 10, filter_mode: str = "all") -> tuple[list[dict], int]:
+    """
+    Return paginated users with their license count.
+    filter_mode: 'all' | 'licensed' | 'unlicensed'
+    """
+    conn = get_connection()
+    try:
+        offset = (page - 1) * per_page
+
+        if filter_mode == "licensed":
+            where = "HAVING COUNT(l.id) > 0"
+        elif filter_mode == "unlicensed":
+            where = "HAVING COUNT(l.id) = 0"
+        else:
+            where = ""
+
+        rows = conn.execute(
+            f"""
+            SELECT s.telegram_id, COUNT(l.id) as license_count
+            FROM states s
+            LEFT JOIN licenses l ON l.owner_telegram_id = s.telegram_id
+            GROUP BY s.telegram_id
+            {where}
+            ORDER BY license_count DESC
+            LIMIT ? OFFSET ?
+            """,
+            (per_page, offset),
+        ).fetchall()
+
+        total = conn.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT s.telegram_id
+                FROM states s
+                LEFT JOIN licenses l ON l.owner_telegram_id = s.telegram_id
+                GROUP BY s.telegram_id
+                {where}
+            )
+            """
+        ).fetchone()[0]
+
+        return [dict(r) for r in rows], total
+    finally:
+        conn.close()
+
+
+def search_users(query: str, page: int = 1, per_page: int = 10) -> tuple[list[dict], int]:
+    """Search users by telegram_id or owner_username from licenses table."""
+    conn = get_connection()
+    try:
+        offset = (page - 1) * per_page
+        q = query.strip().lstrip("@")
+
+        if q.isdigit():
+            where = "WHERE l.owner_telegram_id = ? OR s.telegram_id = ?"
+            count_where = where
+            params = (int(q), int(q))
+        else:
+            like = f"%{q}%"
+            where = "WHERE l.owner_username LIKE ?"
+            count_where = where
+            params = (like,)
+
+        rows = conn.execute(
+            f"""
+            SELECT s.telegram_id,
+                   MAX(l.owner_username) as owner_username,
+                   COUNT(l.id) as license_count
+            FROM states s
+            LEFT JOIN licenses l ON l.owner_telegram_id = s.telegram_id
+            {where}
+            GROUP BY s.telegram_id
+            ORDER BY license_count DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, per_page, offset),
+        ).fetchall()
+
+        total = conn.execute(
+            f"""
+            SELECT COUNT(DISTINCT s.telegram_id)
+            FROM states s
+            LEFT JOIN licenses l ON l.owner_telegram_id = s.telegram_id
+            {count_where}
+            """,
+            params,
+        ).fetchone()[0]
+
+        return [dict(r) for r in rows], total
+    finally:
+        conn.close()
+
+
+def get_all_user_telegram_ids() -> list[int]:
+    """Return all telegram_ids registered in states table."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT telegram_id FROM states").fetchall()
+        return [r["telegram_id"] for r in rows]
+    finally:
+        conn.close()
+
+
+def get_licensed_user_telegram_ids() -> list[int]:
+    """Return telegram_ids of users who have at least one license."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT owner_telegram_id FROM licenses"
+        ).fetchall()
+        return [r["owner_telegram_id"] for r in rows]
+    finally:
+        conn.close()
+
+
+def get_unlicensed_user_telegram_ids() -> list[int]:
+    """Return telegram_ids of users who have no licenses."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.telegram_id FROM states s
+            WHERE s.telegram_id NOT IN (
+                SELECT DISTINCT owner_telegram_id FROM licenses
+            )
+            """
+        ).fetchall()
+        return [r["telegram_id"] for r in rows]
     finally:
         conn.close()
 

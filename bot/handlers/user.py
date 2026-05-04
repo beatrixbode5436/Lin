@@ -2,6 +2,7 @@ import logging
 import telebot
 
 from bot.keyboards.license_kb import user_licenses_keyboard
+from config import API_BASE_URL
 from services.license_service import get_licenses_by_owner, get_license_by_id
 from utils.helpers import calculate_remaining, format_datetime, paginate
 
@@ -41,6 +42,8 @@ def _build_licenses_page(
             f"⏳ License Expires: {format_datetime(lic['expires_at'])[:10]}\n"
             f"⌛ Remaining: {time_str}\n"
             f"🔖 Status: {status}\n"
+            f"🔑 API Key: <code>{lic['api_key']}</code>\n"
+            f"🌐 API URL: <code>{API_BASE_URL}/api/license/check</code>\n"
             "━━━━━━━━━━━━━━━━━━\n"
         )
 
@@ -117,7 +120,9 @@ def register_user_handlers(bot: telebot.TeleBot) -> None:
             f"📅 Created: {format_datetime(lic['created_at'])[:10]}\n"
             f"⏳ Expires: {format_datetime(lic['expires_at'])[:10]}\n"
             f"⌛ Remaining: {time_str}\n"
-            f"🔖 Status: {status}"
+            f"🔖 Status: {status}\n\n"
+            f"🔑 <b>API Key:</b>\n<code>{lic['api_key']}</code>\n\n"
+            f"🌐 <b>API URL:</b>\n<code>{API_BASE_URL}/api/license/check</code>"
         )
 
         from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton

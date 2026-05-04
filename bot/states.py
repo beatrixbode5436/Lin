@@ -39,6 +39,12 @@ class States:
     ADMIN_WAITING_BACKUP_INTERVAL   = "admin_waiting_backup_interval"
     ADMIN_WAITING_BACKUP_DEST       = "admin_waiting_backup_dest"
 
+    # ── Admin: User Management ────────────────────────────────────────────────
+    ADMIN_WAITING_USER_SEARCH       = "admin_waiting_user_search"
+
+    # ── Admin: Forward ────────────────────────────────────────────────────────
+    ADMIN_WAITING_FORWARD_MSG       = "admin_waiting_forward_msg"
+
 
 def get_state(telegram_id: int) -> tuple[str | None, dict]:
     conn = get_connection()

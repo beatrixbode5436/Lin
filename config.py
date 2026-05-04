@@ -20,4 +20,5 @@ DB_PATH: str = os.getenv("DB_PATH", "data/license_bot.db")
 # ─── Misc ─────────────────────────────────────────────────────────────────────
 CHANNEL_URL: str = os.getenv("CHANNEL_URL", "https://t.me/your_channel")
 SUPPORT_USERNAME: str = os.getenv("SUPPORT_USERNAME", "@Emad_Habibnia")
-NOTIFICATION_INTERVAL: int = int(os.getenv("NOTIFICATION_INTERVAL", "3600"))
+NOTIFICATION_INTERVAL: int = int(os.getenv("NOTIFICATION_INTERVAL", "900"))
+AUTO_DEACTIVATE_HOURS: int = int(os.getenv("AUTO_DEACTIVATE_HOURS", "12"))

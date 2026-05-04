@@ -7,7 +7,9 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb.add(
         InlineKeyboardButton("📝 تنظیم متن خرید اشتراک", callback_data="admin_set_sub_text"),
         InlineKeyboardButton("📋 مدیریت لایسنس‌ها",       callback_data="admin_licenses"),
-        InlineKeyboardButton("💾 بکاپ",                    callback_data="admin_backup"),
+        InlineKeyboardButton("� مدیریت کاربران",          callback_data="admin_users"),
+        InlineKeyboardButton("📢 ارسال پیام (فوروارد)",    callback_data="admin_forward"),
+        InlineKeyboardButton("�💾 بکاپ",                    callback_data="admin_backup"),
     )
     return kb
 
@@ -134,6 +136,59 @@ def backup_panel_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton("♻️ بازیابی بکاپ",             callback_data="admin_backup_restore"),
         InlineKeyboardButton("⏰ زمان بکاپ خودکار (ساعت)", callback_data="admin_backup_set_interval"),
         InlineKeyboardButton("📬 مقصد بکاپ خودکار",        callback_data="admin_backup_set_dest"),
+    )
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
+    return kb
+
+
+def users_panel_keyboard(filter_mode: str = "all") -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    all_btn    = InlineKeyboardButton("👥 همه" + (" ✓" if filter_mode == "all" else ""),       callback_data="admin_users_filter_all")
+    lic_btn    = InlineKeyboardButton("✅ دارندگان لاینسس" + (" ✓" if filter_mode == "licensed" else ""),  callback_data="admin_users_filter_licensed")
+    no_lic_btn = InlineKeyboardButton("❌ بدون لاینسس" + (" ✓" if filter_mode == "unlicensed" else ""), callback_data="admin_users_filter_unlicensed")
+    kb.row(lic_btn, no_lic_btn)
+    kb.add(all_btn)
+    kb.add(InlineKeyboardButton("🔍 جستجوی کاربر", callback_data="admin_users_search"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
+    return kb
+
+
+def users_list_keyboard(
+    users: list[dict],
+    page: int,
+    total_pages: int,
+    filter_mode: str = "all",
+) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    for u in users:
+        uname = u.get("owner_username") or ""
+        label_name = f"@{uname}" if uname else f"ID:{u['telegram_id']}"
+        cnt = u.get("license_count", 0)
+        kb.add(InlineKeyboardButton(
+            f"👤 {label_name}  |  🔑 {cnt} لاینسس",
+            callback_data=f"admin_user_view_{u['telegram_id']}",
+        ))
+
+    prefix = f"admin_users_page_{filter_mode}_"
+    nav: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav.append(InlineKeyboardButton("◀️ قبلی", callback_data=f"{prefix}{page - 1}"))
+    nav.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav.append(InlineKeyboardButton("بعدی ▶️", callback_data=f"{prefix}{page + 1}"))
+    if nav:
+        kb.row(*nav)
+
+    kb.add(InlineKeyboardButton("🔙 بازگشت به فیلترها", callback_data="admin_users"))
+    return kb
+
+
+def forward_panel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("📢 ارسال برای همه",              callback_data="admin_fwd_all"),
+        InlineKeyboardButton("✅ ارسال فقط برای دارندگان لاینسس", callback_data="admin_fwd_licensed"),
+        InlineKeyboardButton("❌ ارسال برای کاربران بدون لاینسس", callback_data="admin_fwd_unlicensed"),
     )
     kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
     return kb
